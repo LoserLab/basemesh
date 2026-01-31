@@ -27,6 +27,12 @@ Or with dev dependencies:
 pip install -e ".[dev]"
 ```
 
+To enable the HTTP API (for Mirra Resource registration):
+
+```bash
+pip install -e ".[http]"
+```
+
 ## Quick Start
 
 ### 1. Create a wallet
@@ -186,6 +192,39 @@ basemesh queue clear --yes
 basemesh queue clear --status sent --yes
 ```
 
+### 9. HTTP API (Mirra Resource)
+
+The gateway can expose a REST API for external integrations such as [Mirra](https://getmirra.app) Resource registration. The API auto-generates an OpenAPI 3.0 spec at `/openapi.json`.
+
+```bash
+basemesh gateway --rpc-url https://sepolia.base.org --http-port 8420 --api-key your-secret-key
+```
+
+**Endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v1/status` | Gateway info (uptime, chain, capabilities) |
+| GET | `/v1/balance/{address}?token=` | ETH or ERC-20 balance |
+| GET | `/v1/gas` | Current gas price and chain ID |
+| GET | `/v1/nonce/{address}` | Account nonce (transaction count) |
+| POST | `/v1/transfer` | Submit transfer from gateway hot wallet |
+
+All endpoints require an `X-API-Key` header. Rate limiting is applied per API key.
+
+```bash
+# Check gateway status
+curl -H "X-API-Key: your-secret-key" http://localhost:8420/v1/status
+
+# Query balance
+curl -H "X-API-Key: your-secret-key" http://localhost:8420/v1/balance/0x742d...
+
+# Get OpenAPI spec (no auth required)
+curl http://localhost:8420/openapi.json
+```
+
+The HTTP API requires optional dependencies: `pip install basemesh[http]`
+
 ## Configuration
 
 Copy `config.example.yaml` to `config.yaml` and edit:
@@ -273,6 +312,10 @@ If both limits are unset, native ETH uses the `max_transfer_eth` default (0.1 ET
 - `--wallet` / `-w`: Wallet name (required for passphrase caching)
 - `--gateway-node` / `-g`: Gateway mesh node ID (optional, auto-discovers otherwise)
 
+**Gateway HTTP flags** (`gateway`):
+- `--http-port`: Port for HTTP API server (enables REST API for Mirra)
+- `--api-key`: API key for HTTP API authentication (required if `--http-port` is set)
+
 **Balance flags** (`balance`):
 - `--discovery-timeout`: Gateway discovery timeout in seconds (default: 120)
 
@@ -331,6 +374,9 @@ Message types: `TX_CHUNK`, `TX_REQUEST`, `ADDR_SHARE`, `ACK`, `NACK`, `BALANCE_R
 - Queue file created with `0600` permissions, atomic writes via write-tmp-rename
 - Passphrases for auto-flush are held in memory only (never written to disk)
 - Deferred intents are re-signed at send time (no stale pre-signed transactions stored)
+- HTTP API requires API key authentication on all endpoints
+- HTTP API rate limiting uses separate token buckets from mesh senders
+- HTTP API enforces the same transfer limits (`max_transfer_eth` / `max_transfer_token_units`) as mesh Mode 3
 
 ## Disclaimer
 
@@ -359,7 +405,7 @@ Use at your own risk.
 ## Development
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev,http]"
 PYTHONPATH=src python3 -m pytest tests/ -v
 ```
 

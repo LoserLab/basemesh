@@ -24,5 +24,8 @@ gateway:
   max_requests_per_minute: 10.0  # rate limit
   rate_limit_burst: 3            # burst allowance
   beacon_interval: 60            # seconds between beacon broadcasts
+  # HTTP API (for Mirra Resource registration)
+  # http_port: 8420              # port to serve REST API (disabled if omitted)
+  # api_key: "your-secret-key"   # required when http_port is set
 
 log_level: INFO                  # DEBUG, INFO, WARNING, ERROR

@@ -52,6 +52,8 @@ class GatewayConfig:
     max_requests_per_minute: float = 10.0
     rate_limit_burst: int = 3
     beacon_interval: int = 60
+    http_port: Optional[int] = None   # Port for HTTP API (None = disabled)
+    api_key: Optional[str] = None     # Required API key for HTTP auth
 
 
 @dataclass
@@ -95,6 +97,8 @@ def load_config(path: Path) -> BaseMeshConfig:
             max_requests_per_minute=g.get("max_requests_per_minute", 10.0),
             rate_limit_burst=g.get("rate_limit_burst", 3),
             beacon_interval=g.get("beacon_interval", 60),
+            http_port=g.get("http_port"),
+            api_key=g.get("api_key"),
         )
 
     config.log_level = raw.get("log_level", "INFO")

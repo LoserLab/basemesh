@@ -82,6 +82,7 @@ class GatewayNode:
         self._hot_address: Optional[str] = None
         self._start_time = time.time()
         self._beacon_thread: Optional[threading.Thread] = None
+        self._http_thread: Optional[threading.Thread] = None
         self._running = False
         self._nonce_lock = threading.Lock()
         self._local_nonce: Optional[int] = None
@@ -140,6 +141,9 @@ class GatewayNode:
         self._running = True
         self._start_beacon_thread()
 
+        if self._config.http_port:
+            self._start_http_server()
+
         logger.info("Gateway node started. Listening for BaseMesh messages...")
         self._mesh.run()
 
@@ -149,6 +153,39 @@ class GatewayNode:
             target=self._beacon_loop, daemon=True
         )
         self._beacon_thread.start()
+
+    def _start_http_server(self) -> None:
+        """Start the FastAPI HTTP server in a daemon thread."""
+        try:
+            import uvicorn
+            from basemesh.http_api import create_api
+        except ImportError:
+            logger.error(
+                "HTTP API requires additional dependencies. "
+                "Install with: pip install basemesh[http]"
+            )
+            raise RuntimeError(
+                "FastAPI/uvicorn not installed. "
+                "Install with: pip install basemesh[http]"
+            )
+
+        if not self._config.api_key:
+            raise RuntimeError(
+                "HTTP API requires an API key. "
+                "Set --api-key or api_key in config."
+            )
+
+        app = create_api(self)
+        port = self._config.http_port
+
+        def _run_server():
+            uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+
+        self._http_thread = threading.Thread(
+            target=_run_server, daemon=True, name="http-api",
+        )
+        self._http_thread.start()
+        logger.info("HTTP API started on port %d", port)
 
     def _beacon_loop(self) -> None:
         """Periodically broadcast gateway beacon."""
