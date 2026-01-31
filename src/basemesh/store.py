@@ -7,11 +7,13 @@ keys or passphrases are ever written to disk.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
 import tempfile
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -60,8 +62,33 @@ class IntentStore:
     def __init__(self, queue_dir: Path = DEFAULT_QUEUE_DIR):
         self._queue_dir = Path(queue_dir)
         self._queue_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(str(self._queue_dir), 0o700)
+        except OSError:
+            pass  # Best-effort on platforms that don't support it
         self._queue_path = self._queue_dir / QUEUE_FILENAME
+        self._lock_path = self._queue_dir / "queue.lock"
         self._recover_stale_sending()
+
+    # ------------------------------------------------------------------
+    # File locking
+    # ------------------------------------------------------------------
+
+    @contextmanager
+    def flush_lock(self):
+        """Acquire an exclusive file lock to prevent concurrent flushes.
+
+        Uses ``fcntl.flock`` so the lock is automatically released if the
+        process dies.  Safe to nest (same-process calls will block until
+        the outer lock is released).
+        """
+        fd = os.open(str(self._lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
     # ------------------------------------------------------------------
     # Persistence helpers
@@ -84,12 +111,19 @@ class IntentStore:
         if not self._queue_path.exists():
             return []
 
-        with open(self._queue_path, "r") as f:
-            data = json.load(f)
+        try:
+            with open(self._queue_path, "r") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning("Corrupted queue file, starting fresh: %s", e)
+            return []
 
         intents: list[Intent] = []
         for raw in data.get("intents", []):
-            intents.append(Intent(**raw))
+            try:
+                intents.append(Intent(**raw))
+            except TypeError as e:
+                logger.warning("Skipping malformed intent: %s", e)
         return intents
 
     def _save(self, intents: list[Intent]) -> None:

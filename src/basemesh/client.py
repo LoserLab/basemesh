@@ -565,14 +565,13 @@ class ClientNode:
         if not self._gateway_id:
             raise ValueError("Gateway node ID not set")
 
-        self._intent_store.update_status(intent.id, IntentStatus.SENDING)
-        self._intent_store.increment_attempts(intent.id)
-
-        # Check if max attempts reached (increment_attempts marks FAILED)
+        # Check if already exhausted
         refreshed = self._intent_store.get(intent.id)
         if refreshed and refreshed.status == IntentStatus.FAILED:
-            logger.warning("Intent %s reached max attempts, marking failed", intent.id)
+            logger.warning("Intent %s already failed, skipping", intent.id)
             return None
+
+        self._intent_store.update_status(intent.id, IntentStatus.SENDING)
 
         try:
             if intent.mode == 3:
@@ -604,10 +603,16 @@ class ClientNode:
                 )
             else:
                 error = result.get("error", "Unknown error") if result else "Timeout"
-                self._intent_store.update_status(
-                    intent.id, IntentStatus.PENDING,
-                    error=error,
-                )
+                # Count this as a real attempt (sent but failed/timed out)
+                self._intent_store.increment_attempts(intent.id)
+                refreshed = self._intent_store.get(intent.id)
+                if not refreshed or refreshed.status == IntentStatus.FAILED:
+                    logger.warning("Intent %s reached max attempts", intent.id)
+                else:
+                    self._intent_store.update_status(
+                        intent.id, IntentStatus.PENDING,
+                        error=error,
+                    )
             return result
 
         except InvalidTag:
@@ -618,19 +623,27 @@ class ClientNode:
             )
             return None
         except Exception as e:
-            self._intent_store.update_status(
-                intent.id, IntentStatus.PENDING,
-                error=str(e),
-            )
+            # Network/timeout errors during send -- count as attempt
+            self._intent_store.increment_attempts(intent.id)
+            refreshed = self._intent_store.get(intent.id)
+            if not refreshed or refreshed.status == IntentStatus.FAILED:
+                logger.warning("Intent %s reached max attempts", intent.id)
+            else:
+                self._intent_store.update_status(
+                    intent.id, IntentStatus.PENDING,
+                    error=str(e),
+                )
             return None
 
     def flush_all_pending(self,
                           passphrase_map: Optional[dict[str, str]] = None,
+                          wallet_filter: Optional[str] = None,
                           ) -> list[dict]:
         """Flush all pending intents sequentially.
 
         *passphrase_map*: ``{wallet_name: passphrase}``.
         Falls back to cached passphrases from :meth:`cache_passphrase`.
+        *wallet_filter*: if set, only flush intents for this wallet.
 
         Returns a list of ``{"intent_id": ..., "result": ...}`` dicts.
         """
@@ -643,36 +656,41 @@ class ClientNode:
             return []
 
         results: list[dict] = []
-        for intent in self._intent_store.pending_intents():
-            # Resolve passphrase
-            pp = None
-            if passphrase_map:
-                pp = passphrase_map.get(intent.wallet_name)
-            if pp is None:
-                pp = self._passphrase_cache.get(intent.wallet_name)
-            if pp is None:
-                logger.warning(
-                    "Skipping intent %s: no passphrase for wallet '%s'",
-                    intent.id, intent.wallet_name,
-                )
-                self._intent_store.update_status(
-                    intent.id, IntentStatus.PENDING,
-                    error="No passphrase available for auto-flush",
-                )
-                continue
+        with self._intent_store.flush_lock():
+            pending = self._intent_store.pending_intents()
+            if wallet_filter:
+                pending = [i for i in pending if i.wallet_name == wallet_filter]
 
-            # Re-check status (increment_attempts in flush_intent may mark FAILED)
-            refreshed = self._intent_store.get(intent.id)
-            if not refreshed or refreshed.status != IntentStatus.PENDING:
-                continue
+            for intent in pending:
+                # Resolve passphrase
+                pp = None
+                if passphrase_map:
+                    pp = passphrase_map.get(intent.wallet_name)
+                if pp is None:
+                    pp = self._passphrase_cache.get(intent.wallet_name)
+                if pp is None:
+                    logger.warning(
+                        "Skipping intent %s: no passphrase for wallet '%s'",
+                        intent.id, intent.wallet_name,
+                    )
+                    self._intent_store.update_status(
+                        intent.id, IntentStatus.PENDING,
+                        error="No passphrase available for auto-flush",
+                    )
+                    continue
 
-            result = self.flush_intent(intent, pp)
-            results.append({"intent_id": intent.id, "result": result})
+                # Re-check status (previous flush_intent may have changed it)
+                refreshed = self._intent_store.get(intent.id)
+                if not refreshed or refreshed.status != IntentStatus.PENDING:
+                    continue
 
-            # Stop if gateway went away mid-flush
-            if not self.is_gateway_online():
-                logger.warning("Gateway went offline during flush, pausing")
-                break
+                result = self.flush_intent(intent, pp)
+                results.append({"intent_id": intent.id, "result": result})
+
+                # Stop if gateway went away mid-flush
+                if not self.is_gateway_online():
+                    logger.warning("Gateway went offline during flush, pausing")
+                    break
 
         return results
 

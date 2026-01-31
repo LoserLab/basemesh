@@ -116,6 +116,73 @@ class TestQueueIntent:
 
 
 class TestFlushIntent:
+    def test_flush_mode1_sends_tx_chunks(self, deferred_setup):
+        """Mode 1 flush: fetches nonce/gas from gateway, signs, sends TX_CHUNKs."""
+        client, mesh, wm, store = deferred_setup
+        intent = client.queue_intent(
+            mode=1, wallet_name="testwallet",
+            recipient="0x" + "ab" * 20,
+            amount=0.001, passphrase="testpass",
+        )
+
+        # Background thread: respond to NONCE_REQ, GAS_REQ, then inject TX_RESULT
+        def gateway_responder():
+            # Wait for nonce request
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                nonce_reqs = mesh.get_sent_of_type(MsgType.NONCE_REQ)
+                if nonce_reqs:
+                    hdr, _ = nonce_reqs[0]
+                    resp = encode_nonce_resp(42)
+                    msg = pack_message(MsgType.NONCE_RESP, hdr.msg_id, 0, 1, resp)
+                    mesh.inject_message(msg, "!aabbccdd")
+                    break
+                time.sleep(0.05)
+
+            # Wait for gas request
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                gas_reqs = mesh.get_sent_of_type(MsgType.GAS_REQ)
+                if gas_reqs:
+                    hdr, _ = gas_reqs[0]
+                    resp = encode_gas_resp(1000000000, 84532)
+                    msg = pack_message(MsgType.GAS_RESP, hdr.msg_id, 0, 1, resp)
+                    mesh.inject_message(msg, "!aabbccdd")
+                    break
+                time.sleep(0.05)
+
+            # Wait for TX_CHUNK and inject TX_RESULT
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                tx_chunks = mesh.get_sent_of_type(MsgType.TX_CHUNK)
+                if tx_chunks:
+                    hdr, _ = tx_chunks[0]
+                    # ACK the chunks
+                    for chunk_hdr, _ in tx_chunks:
+                        ack_payload = encode_ack(chunk_hdr.msg_id, chunk_hdr.chunk_num)
+                        ack_msg = pack_message(MsgType.ACK, 900, 0, 1, ack_payload)
+                        mesh.inject_message(ack_msg, "!aabbccdd")
+                    # Send TX_RESULT
+                    result_payload = encode_tx_result(hdr.msg_id, True, b"0xmode1hash")
+                    result_msg = pack_message(MsgType.TX_RESULT, 901, 0, 1, result_payload)
+                    mesh.inject_message(result_msg, "!aabbccdd")
+                    return
+                time.sleep(0.05)
+
+        thread = threading.Thread(target=gateway_responder, daemon=True)
+        thread.start()
+
+        result = client.flush_intent(intent, "testpass")
+        thread.join(timeout=10)
+
+        # Verify TX_CHUNKs were sent
+        tx_chunks = mesh.get_sent_of_type(MsgType.TX_CHUNK)
+        assert len(tx_chunks) >= 1
+
+        # Verify intent is marked as sent
+        updated = store.get(intent.id)
+        assert updated.status == IntentStatus.SENT
+
     def test_flush_mode3_sends_tx_request(self, deferred_setup):
         client, mesh, wm, store = deferred_setup
         intent = client.queue_intent(
@@ -224,6 +291,44 @@ class TestFlushAllPending:
         updated = store.get(intent.id)
         assert updated.status == IntentStatus.PENDING
         assert "passphrase" in updated.last_error.lower()
+
+    def test_flush_wallet_filter(self, tmp_path):
+        """flush_all_pending with wallet_filter only flushes matching intents."""
+        wallet_dir = tmp_path / "wallets"
+        wallet_dir.mkdir()
+        queue_dir = tmp_path / "queue"
+        queue_dir.mkdir()
+
+        mesh = MockMeshInterface()
+        wm = WalletManager(wallet_dir=wallet_dir)
+        wm.create_wallet("alice", passphrase="ap")
+        wm.create_wallet("bob", passphrase="bp")
+        store = IntentStore(queue_dir=queue_dir)
+        client = ClientNode(
+            mesh=mesh, wallet_manager=wm,
+            gateway_node_id="!aabbccdd",
+            intent_store=store,
+            result_timeout=1.0,
+        )
+        client.connect()
+
+        store.add(mode=3, wallet_name="alice",
+                  recipient="0x" + "ab" * 20, amount=0.5)
+        store.add(mode=3, wallet_name="bob",
+                  recipient="0x" + "cd" * 20, amount=1.0)
+
+        # Only flush alice's intents (with wrong passphrase to keep it simple)
+        # Bob's intent should not be touched
+        results = client.flush_all_pending(
+            passphrase_map={"alice": "ap"},
+            wallet_filter="alice",
+        )
+
+        # Bob's intent should still be pending with no error
+        bob_intents = [i for i in store.pending_intents()
+                       if i.wallet_name == "bob"]
+        assert len(bob_intents) == 1
+        assert bob_intents[0].last_error is None
 
     def test_flush_no_gateway(self, tmp_path):
         wallet_dir = tmp_path / "wallets"

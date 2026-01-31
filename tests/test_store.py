@@ -188,3 +188,33 @@ class TestEdgeCases:
 
     def test_get_nonexistent(self, store):
         assert store.get("nope") is None
+
+    def test_corrupted_json_returns_empty(self, tmp_queue_dir):
+        queue_path = tmp_queue_dir / QUEUE_FILENAME
+        queue_path.write_text("{invalid json!!!")
+        store = IntentStore(queue_dir=tmp_queue_dir)
+        assert store.list_intents() == []
+
+    def test_corrupted_json_recoverable(self, tmp_queue_dir):
+        """After loading corrupted file, new intents can be added."""
+        queue_path = tmp_queue_dir / QUEUE_FILENAME
+        queue_path.write_text("not json at all")
+        store = IntentStore(queue_dir=tmp_queue_dir)
+        intent = store.add(mode=3, wallet_name="a",
+                           recipient="0x" + "ab" * 20, amount=1.0)
+        assert store.get(intent.id) is not None
+
+    def test_directory_permissions(self, tmp_path):
+        d = tmp_path / "new_queue"
+        store = IntentStore(queue_dir=d)
+        mode = os.stat(d).st_mode
+        assert stat.S_IMODE(mode) == 0o700
+
+    def test_flush_lock(self, store):
+        """flush_lock can be acquired and released."""
+        with store.flush_lock():
+            # Should be able to write while holding the lock
+            store.add(mode=3, wallet_name="a",
+                      recipient="0x" + "ab" * 20, amount=1.0)
+        # Lock released, should still be accessible
+        assert len(store.list_intents()) == 1

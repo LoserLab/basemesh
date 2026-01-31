@@ -531,7 +531,8 @@ def queue_flush(ctx, passphrase, wallet, gateway_node, auto_discover, discovery_
     pp_map = {wn: passphrase for wn in wallet_names}
 
     try:
-        results = client.flush_all_pending(passphrase_map=pp_map)
+        results = client.flush_all_pending(passphrase_map=pp_map,
+                                           wallet_filter=wallet)
         for r in results:
             res = r["result"]
             if res and res.get("success"):
