@@ -27,6 +27,9 @@ DEFAULT_GAS_TIMEOUT = 60.0
 DEFAULT_RESULT_TIMEOUT = 120.0
 DEFAULT_BALANCE_TIMEOUT = 60.0
 
+# Store-and-forward
+MAX_FLUSH_ATTEMPTS = 3  # Max attempts to send a queued intent before marking failed
+
 # Ethereum / Base
 WEI_PER_ETH = 1_000_000_000_000_000_000  # 10^18
 ETH_ADDRESS_SIZE = 20

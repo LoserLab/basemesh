@@ -123,7 +123,7 @@ Temporary events in areas without cell coverage can deploy a BaseMesh gateway an
 | Networks | Base Mainnet (8453), Base Sepolia (84532) |
 | Language | Python 3.9+ |
 | License | MIT |
-| Tests | 178 passing |
+| Tests | 215 passing |
 
 ---
 

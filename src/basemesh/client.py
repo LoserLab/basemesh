@@ -74,7 +74,9 @@ class ClientNode:
                  nonce_timeout: float = DEFAULT_NONCE_TIMEOUT,
                  gas_timeout: float = DEFAULT_GAS_TIMEOUT,
                  result_timeout: float = DEFAULT_RESULT_TIMEOUT,
-                 balance_timeout: float = DEFAULT_BALANCE_TIMEOUT):
+                 balance_timeout: float = DEFAULT_BALANCE_TIMEOUT,
+                 intent_store: Optional['IntentStore'] = None,
+                 auto_flush: bool = False):
         self._mesh = mesh
         self._wallet_mgr = wallet_manager
         self._gateway_id = gateway_node_id
@@ -96,6 +98,12 @@ class ClientNode:
         self._nonce_cond = threading.Condition()
         self._gas_cond = threading.Condition()
         self._gateway_cond = threading.Condition()
+        # Store-and-forward
+        self._intent_store = intent_store
+        self._auto_flush = auto_flush
+        self._flush_lock = threading.Lock()
+        self._flushing = False
+        self._passphrase_cache: dict[str, str] = {}
 
     def connect(self) -> None:
         """Connect to mesh and register handlers."""
@@ -499,6 +507,189 @@ class ClientNode:
         logger.info("Pre-flight balance check passed")
         return True
 
+    # --- Store-and-forward ---
+
+    def cache_passphrase(self, wallet_name: str, passphrase: str) -> None:
+        """Cache a passphrase in memory for auto-flush re-signing.
+
+        The passphrase is held in memory only -- never persisted to disk.
+        """
+        self._passphrase_cache[wallet_name] = passphrase
+
+    def queue_intent(self, mode: int, wallet_name: str, recipient: str,
+                     amount: float, token_address: Optional[str] = None,
+                     token_decimals: int = 18,
+                     passphrase: Optional[str] = None) -> 'Intent':
+        """Queue a transaction intent for later sending.
+
+        The intent is persisted to disk.  If *passphrase* is provided it
+        is validated against the wallet and cached in memory for auto-flush.
+        """
+        if not self._intent_store:
+            raise RuntimeError("No intent store configured")
+        if mode not in (1, 3):
+            raise ValueError("mode must be 1 or 3")
+
+        # Validate wallet exists
+        self._wallet_mgr.get_address(wallet_name)
+
+        # Verify passphrase is correct (fail-fast)
+        if passphrase is not None:
+            self._wallet_mgr.load_private_key(wallet_name, passphrase=passphrase)
+            self.cache_passphrase(wallet_name, passphrase)
+
+        intent = self._intent_store.add(
+            mode=mode,
+            wallet_name=wallet_name,
+            recipient=recipient,
+            amount=amount,
+            token_address=token_address,
+            token_decimals=token_decimals,
+        )
+        logger.info("Queued intent %s: mode=%d %s -> %s amount=%s",
+                     intent.id, mode, wallet_name, recipient, amount)
+        return intent
+
+    def flush_intent(self, intent: 'Intent',
+                     passphrase: str) -> Optional[dict]:
+        """Attempt to send a single queued intent.
+
+        For Mode 3: re-signs with a fresh timestamp at send time.
+        For Mode 1: fetches fresh nonce/gas from gateway, then signs.
+
+        Returns result dict or None on timeout/error.
+        """
+        from basemesh.store import IntentStatus
+        from cryptography.exceptions import InvalidTag
+
+        if not self._gateway_id:
+            raise ValueError("Gateway node ID not set")
+
+        self._intent_store.update_status(intent.id, IntentStatus.SENDING)
+        self._intent_store.increment_attempts(intent.id)
+
+        # Check if max attempts reached (increment_attempts marks FAILED)
+        refreshed = self._intent_store.get(intent.id)
+        if refreshed and refreshed.status == IntentStatus.FAILED:
+            logger.warning("Intent %s reached max attempts, marking failed", intent.id)
+            return None
+
+        try:
+            if intent.mode == 3:
+                msg_id = self.request_transfer(
+                    wallet_name=intent.wallet_name,
+                    destination=intent.recipient,
+                    amount=intent.amount,
+                    token_address=intent.token_address,
+                    token_decimals=intent.token_decimals,
+                    passphrase=passphrase,
+                )
+            elif intent.mode == 1:
+                msg_id = self.relay_signed_tx(
+                    wallet_name=intent.wallet_name,
+                    recipient=intent.recipient,
+                    amount=intent.amount,
+                    token_address=intent.token_address,
+                    token_decimals=intent.token_decimals,
+                    passphrase=passphrase,
+                )
+            else:
+                raise ValueError(f"Unknown mode: {intent.mode}")
+
+            result = self.wait_for_result(msg_id)
+            if result and result.get("success"):
+                self._intent_store.update_status(
+                    intent.id, IntentStatus.SENT,
+                    tx_hash=result.get("tx_hash"),
+                )
+            else:
+                error = result.get("error", "Unknown error") if result else "Timeout"
+                self._intent_store.update_status(
+                    intent.id, IntentStatus.PENDING,
+                    error=error,
+                )
+            return result
+
+        except InvalidTag:
+            # Wrong passphrase -- don't count against retry limit
+            self._intent_store.update_status(
+                intent.id, IntentStatus.PENDING,
+                error="Decryption failed -- wrong passphrase",
+            )
+            return None
+        except Exception as e:
+            self._intent_store.update_status(
+                intent.id, IntentStatus.PENDING,
+                error=str(e),
+            )
+            return None
+
+    def flush_all_pending(self,
+                          passphrase_map: Optional[dict[str, str]] = None,
+                          ) -> list[dict]:
+        """Flush all pending intents sequentially.
+
+        *passphrase_map*: ``{wallet_name: passphrase}``.
+        Falls back to cached passphrases from :meth:`cache_passphrase`.
+
+        Returns a list of ``{"intent_id": ..., "result": ...}`` dicts.
+        """
+        from basemesh.store import IntentStatus
+
+        if not self._intent_store:
+            raise RuntimeError("No intent store configured")
+        if not self._gateway_id:
+            logger.warning("Cannot flush: no gateway available")
+            return []
+
+        results: list[dict] = []
+        for intent in self._intent_store.pending_intents():
+            # Resolve passphrase
+            pp = None
+            if passphrase_map:
+                pp = passphrase_map.get(intent.wallet_name)
+            if pp is None:
+                pp = self._passphrase_cache.get(intent.wallet_name)
+            if pp is None:
+                logger.warning(
+                    "Skipping intent %s: no passphrase for wallet '%s'",
+                    intent.id, intent.wallet_name,
+                )
+                self._intent_store.update_status(
+                    intent.id, IntentStatus.PENDING,
+                    error="No passphrase available for auto-flush",
+                )
+                continue
+
+            # Re-check status (increment_attempts in flush_intent may mark FAILED)
+            refreshed = self._intent_store.get(intent.id)
+            if not refreshed or refreshed.status != IntentStatus.PENDING:
+                continue
+
+            result = self.flush_intent(intent, pp)
+            results.append({"intent_id": intent.id, "result": result})
+
+            # Stop if gateway went away mid-flush
+            if not self.is_gateway_online():
+                logger.warning("Gateway went offline during flush, pausing")
+                break
+
+        return results
+
+    def _auto_flush_pending(self) -> None:
+        """Background thread triggered by beacon to flush pending intents."""
+        if not self._flush_lock.acquire(blocking=False):
+            return  # Another flush is already running
+        try:
+            self._flushing = True
+            logger.info("Auto-flush triggered by gateway beacon")
+            self.flush_all_pending()
+        except Exception as e:
+            logger.error("Auto-flush failed: %s", e)
+        finally:
+            self._flushing = False
+            self._flush_lock.release()
+
     # --- Handlers ---
 
     def _handle_ack(self, header: BaseMeshHeader, payload: bytes,
@@ -616,6 +807,16 @@ class ClientNode:
             sender_id, beacon["version"], beacon["capabilities"],
             beacon["uptime_seconds"],
         )
+
+        # Trigger auto-flush if configured and there are pending intents
+        if (self._auto_flush and self._intent_store
+                and not self._flushing):
+            pending = self._intent_store.pending_intents()
+            if pending:
+                thread = threading.Thread(
+                    target=self._auto_flush_pending, daemon=True,
+                )
+                thread.start()
 
     def _handle_addr_share(self, header: BaseMeshHeader, payload: bytes,
                            sender_id: str) -> None:

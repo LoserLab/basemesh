@@ -370,6 +370,281 @@ def send_request(ctx, wallet, recipient, amount, token, usdc, decimals,
         client.close()
 
 
+@send.command("deferred")
+@click.option("--wallet", "-w", required=True, help="Local wallet name")
+@click.option("--to", "recipient", required=True, help="Recipient Ethereum address (0x...)")
+@click.option("--amount", "-a", required=True, type=float, help="Amount in ETH (or token units)")
+@click.option("--mode", "-m", type=click.Choice(["1", "3"]), default="3",
+              help="Transfer mode: 1 (relay) or 3 (gateway request, default)")
+@click.option("--token", default=None, help="ERC-20 token contract address (omit for native ETH)")
+@click.option("--usdc", is_flag=True, help="Send USDC (auto-resolves contract address for current network)")
+@click.option("--decimals", type=int, default=None,
+              help="Token decimal places (default: 18 for ETH, 6 for USDC, auto for --usdc)")
+@click.option("--passphrase", prompt=True, hide_input=True, default="",
+              help="Wallet passphrase (validated, then cached in memory)")
+@click.pass_context
+def send_deferred(ctx, wallet, recipient, amount, mode, token, usdc, decimals, passphrase):
+    """Queue a transaction for sending when a gateway becomes available.
+
+    The intent is stored locally. Use 'basemesh queue flush' or
+    'basemesh listen' to send when a gateway is in range.
+    """
+    from basemesh.store import IntentStore
+
+    config = ctx.obj["config"]
+    token, resolved_decimals = resolve_token(token, usdc, config.base.network)
+    if decimals is not None:
+        resolved_decimals = decimals
+
+    wm = WalletManager()
+    store = IntentStore()
+
+    if token:
+        label = "USDC" if usdc else token
+    else:
+        label = "ETH"
+
+    try:
+        # Validate wallet and passphrase (no mesh connection needed)
+        wm.load_private_key(wallet, passphrase=passphrase)
+    except FileNotFoundError:
+        click.echo(f"Error: Wallet '{wallet}' not found.", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error: Failed to decrypt wallet: {e}", err=True)
+        sys.exit(1)
+
+    try:
+        intent = store.add(
+            mode=int(mode),
+            wallet_name=wallet,
+            recipient=recipient,
+            amount=amount,
+            token_address=token,
+            token_decimals=resolved_decimals,
+        )
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Queued intent {intent.id}: {amount} {label} -> {recipient} (mode {mode})")
+    click.echo("Use 'basemesh queue list' to see pending intents.")
+    click.echo("Use 'basemesh queue flush' or 'basemesh listen' to send.")
+
+
+# --- Queue management ---
+
+@cli.group()
+def queue():
+    """Manage the store-and-forward intent queue."""
+    pass
+
+
+@queue.command("list")
+@click.option("--status", type=click.Choice(["pending", "sending", "sent", "failed"]),
+              default=None, help="Filter by status")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def queue_list(status, as_json):
+    """List queued transaction intents."""
+    from basemesh.store import IntentStore
+    from datetime import datetime
+
+    store = IntentStore()
+    intents = store.list_intents(status=status)
+
+    if as_json:
+        from dataclasses import asdict
+        click.echo(json_mod.dumps([asdict(i) for i in intents], indent=2))
+        return
+
+    if not intents:
+        click.echo("No intents in queue.")
+        return
+
+    click.echo(f"{'ID':<10} {'Mode':<6} {'Status':<9} {'Wallet':<14} "
+               f"{'To':<14} {'Amount':<12} {'Created'}")
+    click.echo("-" * 85)
+    for i in intents:
+        to_short = i.recipient[:8] + "..." + i.recipient[-4:]
+        ts = datetime.fromtimestamp(i.created_at).strftime("%Y-%m-%d %H:%M")
+        token_label = ""
+        if i.token_address:
+            token_label = " (ERC20)"
+        click.echo(f"{i.id:<10} {i.mode:<6} {i.status:<9} {i.wallet_name:<14} "
+                   f"{to_short:<14} {i.amount}{token_label:<12} {ts}")
+
+
+@queue.command("flush")
+@click.option("--passphrase", prompt=True, hide_input=True, default="",
+              help="Wallet passphrase for re-signing")
+@click.option("--wallet", "-w", default=None,
+              help="Only flush intents for this wallet")
+@click.option("--gateway-node", "-g", default=None, help="Gateway mesh node ID")
+@click.option("--auto-discover", is_flag=True, help="Auto-discover gateway via beacon")
+@click.option("--discovery-timeout", type=float, default=None,
+              help="Gateway discovery timeout in seconds (default: 120)")
+@click.pass_context
+def queue_flush(ctx, passphrase, wallet, gateway_node, auto_discover, discovery_timeout):
+    """Send pending intents to a gateway (requires mesh connection)."""
+    from basemesh.client import ClientNode
+    from basemesh.store import IntentStore
+
+    config = ctx.obj["config"]
+    store = IntentStore()
+    pending = store.pending_intents()
+
+    if wallet:
+        pending = [i for i in pending if i.wallet_name == wallet]
+
+    if not pending:
+        click.echo("No pending intents to flush.")
+        return
+
+    click.echo(f"Found {len(pending)} pending intent(s).")
+
+    mesh = build_mesh(config)
+    wm = WalletManager()
+
+    client_kwargs = {}
+    if discovery_timeout is not None:
+        client_kwargs["discovery_timeout"] = discovery_timeout
+
+    client = ClientNode(
+        mesh=mesh, wallet_manager=wm,
+        gateway_node_id=gateway_node,
+        intent_store=store,
+        **client_kwargs,
+    )
+    client.connect()
+
+    if auto_discover and not gateway_node:
+        click.echo("Discovering gateway via beacon...")
+        gw = client.discover_gateway()
+        if not gw:
+            click.echo("No gateway found.", err=True)
+            client.close()
+            sys.exit(1)
+        click.echo(f"  Found gateway: {gw}")
+
+    # Build passphrase map for all wallets in the queue
+    wallet_names = set(i.wallet_name for i in pending)
+    pp_map = {wn: passphrase for wn in wallet_names}
+
+    try:
+        results = client.flush_all_pending(passphrase_map=pp_map)
+        for r in results:
+            res = r["result"]
+            if res and res.get("success"):
+                click.echo(f"  {r['intent_id']}: Success! TX: {res.get('tx_hash', 'N/A')}")
+            elif res:
+                click.echo(f"  {r['intent_id']}: Failed: {res.get('error', 'Unknown')}")
+            else:
+                click.echo(f"  {r['intent_id']}: Timeout (will retry later)")
+
+        still_pending = len(store.pending_intents())
+        if still_pending:
+            click.echo(f"{still_pending} intent(s) still pending.")
+        else:
+            click.echo("All intents processed.")
+    finally:
+        client.close()
+
+
+@queue.command("clear")
+@click.option("--status", type=click.Choice(["pending", "sent", "failed"]),
+              default=None, help="Only clear intents with this status (default: all)")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
+def queue_clear(status, yes):
+    """Remove intents from the queue."""
+    from basemesh.store import IntentStore
+
+    store = IntentStore()
+
+    if not yes:
+        label = f"all '{status}'" if status else "ALL"
+        if not click.confirm(f"Remove {label} intents from the queue?", default=False):
+            click.echo("Cancelled.")
+            return
+
+    removed = store.clear(status=status)
+    click.echo(f"Removed {removed} intent(s).")
+
+
+@queue.command("remove")
+@click.argument("intent_id")
+def queue_remove(intent_id):
+    """Remove a specific intent by ID."""
+    from basemesh.store import IntentStore
+
+    store = IntentStore()
+    if store.remove(intent_id):
+        click.echo(f"Removed intent {intent_id}.")
+    else:
+        click.echo(f"Intent '{intent_id}' not found.", err=True)
+        sys.exit(1)
+
+
+# --- Listen (auto-flush daemon) ---
+
+@cli.command("listen")
+@click.option("--wallet", "-w", required=True, help="Wallet name (for passphrase caching)")
+@click.option("--passphrase", prompt=True, hide_input=True, default="",
+              help="Wallet passphrase (held in memory for auto-signing)")
+@click.option("--gateway-node", "-g", default=None, help="Gateway mesh node ID (optional)")
+@click.pass_context
+def listen(ctx, wallet, passphrase, gateway_node):
+    """Listen for gateway beacons and auto-send queued intents.
+
+    Runs as a long-lived process. When a gateway beacon is received,
+    all pending intents are automatically signed and sent.
+    Press Ctrl+C to stop.
+    """
+    from basemesh.client import ClientNode
+    from basemesh.store import IntentStore
+
+    config = ctx.obj["config"]
+    mesh = build_mesh(config)
+    wm = WalletManager()
+    store = IntentStore()
+
+    # Validate passphrase
+    try:
+        wm.load_private_key(wallet, passphrase=passphrase)
+    except FileNotFoundError:
+        click.echo(f"Error: Wallet '{wallet}' not found.", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error: Failed to decrypt wallet: {e}", err=True)
+        sys.exit(1)
+
+    client = ClientNode(
+        mesh=mesh, wallet_manager=wm,
+        gateway_node_id=gateway_node,
+        intent_store=store,
+        auto_flush=True,
+    )
+    client.cache_passphrase(wallet, passphrase)
+    client.connect()
+
+    pending_count = len(store.pending_intents())
+    click.echo(f"Listening for gateway beacons (auto-flush enabled)...")
+    click.echo(f"  Wallet: {wallet}")
+    click.echo(f"  Pending intents: {pending_count}")
+    if gateway_node:
+        click.echo(f"  Gateway: {gateway_node}")
+    else:
+        click.echo("  Gateway: auto-discover")
+    click.echo("  Press Ctrl+C to stop.")
+    click.echo()
+
+    try:
+        mesh.run()
+    except KeyboardInterrupt:
+        click.echo("\nStopping listener...")
+    finally:
+        client.close()
+
+
 # --- Address sharing ---
 
 @cli.command("share-address")

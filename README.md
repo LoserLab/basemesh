@@ -148,6 +148,44 @@ basemesh balance --address 0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18 --usdc --a
 basemesh share-address --wallet mywallet --label "Field Node Alpha"
 ```
 
+### 8. Store-and-forward (deferred transactions)
+
+Queue a transaction when no gateway is available:
+```bash
+basemesh send deferred \
+  --wallet mywallet \
+  --to 0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18 \
+  --amount 0.5 \
+  --mode 3
+```
+
+The intent is stored locally at `~/.basemesh/queue.json`. No mesh connection is needed. The passphrase is validated at queue time but **not** persisted to disk.
+
+View pending intents:
+```bash
+basemesh queue list
+basemesh queue list --status pending --json
+```
+
+Manually flush when a gateway is available:
+```bash
+basemesh queue flush --auto-discover
+```
+
+Or run a long-lived listener that auto-sends when a gateway beacon is detected:
+```bash
+basemesh listen --wallet mywallet
+```
+
+The listener caches your passphrase in memory and automatically signs and sends all pending intents whenever a gateway comes into range. Mode 3 intents are re-signed with a fresh timestamp at send time. Mode 1 intents fetch fresh nonce and gas price from the gateway before signing.
+
+Remove intents:
+```bash
+basemesh queue remove <intent-id>
+basemesh queue clear --yes
+basemesh queue clear --status sent --yes
+```
+
 ## Configuration
 
 Copy `config.example.yaml` to `config.yaml` and edit:
@@ -223,6 +261,18 @@ If both limits are unset, native ETH uses the `max_transfer_eth` default (0.1 ET
 **Wallet flags** (`wallet create`):
 - `--skip-backup-check`: Skip mnemonic backup verification prompt
 
+**Deferred send flags** (`send deferred`):
+- `--mode` / `-m`: Transfer mode: `1` (relay) or `3` (gateway request, default)
+
+**Queue flags** (`queue flush`):
+- `--wallet` / `-w`: Only flush intents for this wallet
+- `--auto-discover`: Auto-discover gateway via beacon
+- `--discovery-timeout`: Gateway discovery timeout in seconds (default: 120)
+
+**Listen flags** (`listen`):
+- `--wallet` / `-w`: Wallet name (required for passphrase caching)
+- `--gateway-node` / `-g`: Gateway mesh node ID (optional, auto-discovers otherwise)
+
 **Balance flags** (`balance`):
 - `--discovery-timeout`: Gateway discovery timeout in seconds (default: 120)
 
@@ -277,6 +327,10 @@ Message types: `TX_CHUNK`, `TX_REQUEST`, `ADDR_SHARE`, `ACK`, `NACK`, `BALANCE_R
 - Mnemonic backup verification during wallet creation
 - TX_REQUEST replay protection via 4-byte timestamp (5-minute window) and signature deduplication
 - Hot wallet balance verified before spending (includes gas estimate for ETH)
+- Store-and-forward queue contains **no secrets** (wallet names and public addresses only, no keys or passphrases)
+- Queue file created with `0600` permissions, atomic writes via write-tmp-rename
+- Passphrases for auto-flush are held in memory only (never written to disk)
+- Deferred intents are re-signed at send time (no stale pre-signed transactions stored)
 
 ## Disclaimer
 
