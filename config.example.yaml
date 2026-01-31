@@ -1,0 +1,28 @@
+# BaseMesh Configuration
+# Copy to config.yaml and customize for your setup.
+
+# Meshtastic device connection
+mesh:
+  connection_type: serial       # "serial" or "tcp"
+  device_path: /dev/ttyUSB0     # for serial (auto-detected if omitted)
+  # hostname: 192.168.1.100     # for tcp
+
+# Base network settings
+base:
+  network: base-sepolia          # "base-mainnet" or "base-sepolia"
+  # rpc_url: https://sepolia.base.org  # custom RPC (overrides network)
+  # chain_id: 84532              # auto-resolved from network if omitted
+
+# Gateway mode settings (only used when running as gateway)
+gateway:
+  hot_wallet: gateway-wallet     # wallet name for Mode 3 hot wallet
+  allowed_requesters:            # Ethereum addresses (0x...), empty = allow all
+    # - "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+  max_transfer_eth: 0.1          # per-request limit in ETH (native transfers)
+  max_transfer_token_units: 0    # per-request limit for ERC-20 in raw token units
+                                 # 0 = no limit; e.g., 1000000000 = 1000 USDC (6 decimals)
+  max_requests_per_minute: 10.0  # rate limit
+  rate_limit_burst: 3            # burst allowance
+  beacon_interval: 60            # seconds between beacon broadcasts
+
+log_level: INFO                  # DEBUG, INFO, WARNING, ERROR
