@@ -2,7 +2,7 @@
 
 Send Base (Ethereum L2) transactions over Meshtastic/LoRa mesh networks.
 
-BaseMesh enables cryptocurrency transfers in off-grid environments using LoRa radio. Transactions are signed locally (private keys never leave your device), chunked to fit within LoRa's bandwidth constraints, and relayed through a gateway node to the Base network. Supports native ETH and ERC-20 token transfers (including USDC).
+BaseMesh enables cryptocurrency transfers in off-grid environments using LoRa radio. Transactions are signed locally (private keys never leave your device), chunked to fit within LoRa's bandwidth constraints, and relayed through a gateway node to the Base network. Supports native ETH and ERC-20 token transfers (including USDC). Built in collaboration with [Mirra](https://x.com/mirra).
 
 ## Operating Modes
 
@@ -121,6 +121,16 @@ basemesh send relay \
   --to 0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18 \
   --amount 10.0 \
   --usdc \
+  --auto-discover
+```
+
+Send BNKR (auto-resolves contract address for the configured network):
+```bash
+basemesh send relay \
+  --wallet mywallet \
+  --to 0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18 \
+  --amount 100.0 \
+  --bnkr \
   --auto-discover
 ```
 
@@ -326,12 +336,13 @@ If both limits are unset, native ETH uses the `max_transfer_eth` default (0.1 ET
 | Base Mainnet | 8453 | https://mainnet.base.org |
 | Base Sepolia (testnet) | 84532 | https://sepolia.base.org |
 
-## Known USDC Addresses
+## Known Token Addresses
 
-| Network | USDC Address | Decimals |
-|---------|-------------|----------|
-| Base Mainnet | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | 6 |
-| Base Sepolia | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` | 6 |
+| Token | Network | Address | Decimals |
+|-------|---------|---------|----------|
+| USDC | Base Mainnet | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | 6 |
+| USDC | Base Sepolia | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` | 6 |
+| BNKR | Base Mainnet | `0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b` | 18 |
 
 ## Protocol
 
@@ -415,6 +426,10 @@ PYTHONPATH=src python3 -m pytest tests/ -v
 - Meshtastic device (USB or WiFi connected)
 - `meshtastic`, `web3`, `eth-account`, `click`, `pyyaml`, `cryptography`, `mnemonic` Python libraries
 
+## Acknowledgments
+
+Built with [Mirra](https://x.com/mirra) and their team.
+
 ## License
 
-MIT
+MIT - [Heathen](https://x.com/heathenft)

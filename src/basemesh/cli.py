@@ -11,7 +11,7 @@ from typing import Optional
 import click
 
 from basemesh.config import BaseMeshConfig, get_rpc_url, get_chain_id, load_config
-from basemesh.constants import WEI_PER_ETH, USDC_ADDRESSES, USDC_DECIMALS
+from basemesh.constants import WEI_PER_ETH, USDC_ADDRESSES, USDC_DECIMALS, BNKR_ADDRESSES, BNKR_DECIMALS
 from basemesh.mesh import MeshInterface
 from basemesh.wallet import WalletManager
 
@@ -28,14 +28,15 @@ class _JsonFormatter(logging.Formatter):
         })
 
 
-def resolve_token(token, usdc: bool, network: str):
-    """Resolve --usdc flag or --token to a token contract address.
+def resolve_token(token, usdc: bool, network: str, bnkr: bool = False):
+    """Resolve --usdc/--bnkr flag or --token to a token contract address.
 
     Returns (token_address, decimals) tuple.
     token_address is None for native ETH.
     """
-    if usdc and token:
-        raise click.UsageError("Cannot use --usdc and --token together.")
+    flags_set = sum([bool(usdc), bool(bnkr), bool(token)])
+    if flags_set > 1:
+        raise click.UsageError("Cannot use --usdc, --bnkr, and --token together.")
     if usdc:
         addr = USDC_ADDRESSES.get(network)
         if not addr:
@@ -44,6 +45,14 @@ def resolve_token(token, usdc: bool, network: str):
                 f"Use --token with the contract address instead."
             )
         return addr, USDC_DECIMALS
+    if bnkr:
+        addr = BNKR_ADDRESSES.get(network)
+        if not addr:
+            raise click.UsageError(
+                f"No BNKR address configured for network '{network}'. "
+                f"Use --token with the contract address instead."
+            )
+        return addr, BNKR_DECIMALS
     return token, 18
 
 
@@ -176,6 +185,7 @@ def send(ctx):
 @click.option("--amount", "-a", required=True, type=float, help="Amount in ETH (or token units)")
 @click.option("--token", default=None, help="ERC-20 token contract address (omit for native ETH)")
 @click.option("--usdc", is_flag=True, help="Send USDC (auto-resolves contract address for current network)")
+@click.option("--bnkr", is_flag=True, help="Send BNKR (auto-resolves contract address for current network)")
 @click.option("--decimals", type=int, default=None,
               help="Token decimal places (default: 18 for ETH, 6 for USDC, auto for --usdc)")
 @click.option("--gateway-node", "-g", help="Gateway mesh node ID (e.g., !aabbccdd)")
@@ -190,14 +200,14 @@ def send(ctx):
 @click.option("--discovery-timeout", type=float, default=None,
               help="Gateway discovery timeout in seconds (default: 120)")
 @click.pass_context
-def send_relay(ctx, wallet, recipient, amount, token, usdc, decimals,
+def send_relay(ctx, wallet, recipient, amount, token, usdc, bnkr, decimals,
                gateway_node, auto_discover, passphrase, yes, do_preflight,
                ack_timeout, discovery_timeout):
     """Mode 1: Sign locally and relay signed TX over mesh to gateway."""
     from basemesh.client import ClientNode, _to_raw_amount
 
     config = ctx.obj["config"]
-    token, resolved_decimals = resolve_token(token, usdc, config.base.network)
+    token, resolved_decimals = resolve_token(token, usdc, config.base.network, bnkr=bnkr)
     if decimals is not None:
         resolved_decimals = decimals
     mesh = build_mesh(config)
@@ -223,7 +233,7 @@ def send_relay(ctx, wallet, recipient, amount, token, usdc, decimals,
         click.echo(f"  Found gateway: {gw}")
 
     if token:
-        label = "USDC" if usdc else token
+        label = "USDC" if usdc else "BNKR" if bnkr else token
     else:
         label = "ETH"
 
@@ -282,6 +292,7 @@ def send_relay(ctx, wallet, recipient, amount, token, usdc, decimals,
 @click.option("--amount", "-a", required=True, type=float, help="Amount in ETH (or token units)")
 @click.option("--token", default=None, help="ERC-20 token contract address (omit for native ETH)")
 @click.option("--usdc", is_flag=True, help="Send USDC (auto-resolves contract address for current network)")
+@click.option("--bnkr", is_flag=True, help="Send BNKR (auto-resolves contract address for current network)")
 @click.option("--decimals", type=int, default=None,
               help="Token decimal places (default: 18 for ETH, 6 for USDC, auto for --usdc)")
 @click.option("--gateway-node", "-g", default=None, help="Gateway mesh node ID")
@@ -296,14 +307,14 @@ def send_relay(ctx, wallet, recipient, amount, token, usdc, decimals,
 @click.option("--discovery-timeout", type=float, default=None,
               help="Gateway discovery timeout in seconds (default: 120)")
 @click.pass_context
-def send_request(ctx, wallet, recipient, amount, token, usdc, decimals,
+def send_request(ctx, wallet, recipient, amount, token, usdc, bnkr, decimals,
                  gateway_node, auto_discover, passphrase, yes, do_preflight,
                  ack_timeout, discovery_timeout):
     """Mode 3: Request gateway to send ETH/tokens from its hot wallet."""
     from basemesh.client import ClientNode, _to_raw_amount
 
     config = ctx.obj["config"]
-    token, resolved_decimals = resolve_token(token, usdc, config.base.network)
+    token, resolved_decimals = resolve_token(token, usdc, config.base.network, bnkr=bnkr)
     if decimals is not None:
         resolved_decimals = decimals
     mesh = build_mesh(config)
@@ -329,7 +340,7 @@ def send_request(ctx, wallet, recipient, amount, token, usdc, decimals,
         click.echo(f"  Found gateway: {gw}")
 
     if token:
-        label = "USDC" if usdc else token
+        label = "USDC" if usdc else "BNKR" if bnkr else token
     else:
         label = "ETH"
 
@@ -389,12 +400,13 @@ def send_request(ctx, wallet, recipient, amount, token, usdc, decimals,
               help="Transfer mode: 1 (relay) or 3 (gateway request, default)")
 @click.option("--token", default=None, help="ERC-20 token contract address (omit for native ETH)")
 @click.option("--usdc", is_flag=True, help="Send USDC (auto-resolves contract address for current network)")
+@click.option("--bnkr", is_flag=True, help="Send BNKR (auto-resolves contract address for current network)")
 @click.option("--decimals", type=int, default=None,
               help="Token decimal places (default: 18 for ETH, 6 for USDC, auto for --usdc)")
 @click.option("--passphrase", prompt=True, hide_input=True, default="",
               help="Wallet passphrase (validated, then cached in memory)")
 @click.pass_context
-def send_deferred(ctx, wallet, recipient, amount, mode, token, usdc, decimals, passphrase):
+def send_deferred(ctx, wallet, recipient, amount, mode, token, usdc, bnkr, decimals, passphrase):
     """Queue a transaction for sending when a gateway becomes available.
 
     The intent is stored locally. Use 'basemesh queue flush' or
@@ -403,7 +415,7 @@ def send_deferred(ctx, wallet, recipient, amount, mode, token, usdc, decimals, p
     from basemesh.store import IntentStore
 
     config = ctx.obj["config"]
-    token, resolved_decimals = resolve_token(token, usdc, config.base.network)
+    token, resolved_decimals = resolve_token(token, usdc, config.base.network, bnkr=bnkr)
     if decimals is not None:
         resolved_decimals = decimals
 
@@ -411,7 +423,7 @@ def send_deferred(ctx, wallet, recipient, amount, mode, token, usdc, decimals, p
     store = IntentStore()
 
     if token:
-        label = "USDC" if usdc else token
+        label = "USDC" if usdc else "BNKR" if bnkr else token
     else:
         label = "ETH"
 
@@ -688,18 +700,19 @@ def share_address(ctx, wallet, label):
 @click.option("--address", "-a", required=True, help="Ethereum address to check (0x...)")
 @click.option("--token", default=None, help="ERC-20 token contract address (omit for ETH)")
 @click.option("--usdc", is_flag=True, help="Check USDC balance (auto-resolves contract address)")
+@click.option("--bnkr", is_flag=True, help="Check BNKR balance (auto-resolves contract address)")
 @click.option("--gateway-node", "-g", default=None, help="Gateway mesh node ID")
 @click.option("--auto-discover", is_flag=True, help="Auto-discover gateway via beacon")
 @click.option("--discovery-timeout", type=float, default=None,
               help="Gateway discovery timeout in seconds (default: 120)")
 @click.pass_context
-def check_balance(ctx, address, token, usdc, gateway_node, auto_discover,
+def check_balance(ctx, address, token, usdc, bnkr, gateway_node, auto_discover,
                   discovery_timeout):
     """Query ETH or ERC-20 token balance via gateway."""
     from basemesh.client import ClientNode
 
     config = ctx.obj["config"]
-    token, _ = resolve_token(token, usdc, config.base.network)
+    token, _ = resolve_token(token, usdc, config.base.network, bnkr=bnkr)
     mesh = build_mesh(config)
     wm = WalletManager()
 

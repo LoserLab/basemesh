@@ -61,6 +61,13 @@ USDC_ADDRESSES = {
 }
 USDC_DECIMALS = 6
 
+BNKR_BASE_MAINNET = "0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b"
+
+BNKR_ADDRESSES = {
+    "base-mainnet": BNKR_BASE_MAINNET,
+}
+BNKR_DECIMALS = 18
+
 
 class MsgType:
     """BaseMesh message types (1 byte)."""
