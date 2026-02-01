@@ -2,7 +2,7 @@
 
 Send Base (Ethereum L2) transactions over Meshtastic/LoRa mesh networks.
 
-BaseMesh enables cryptocurrency transfers in off-grid environments using LoRa radio. Transactions are signed locally (private keys never leave your device), chunked to fit within LoRa's bandwidth constraints, and relayed through a gateway node to the Base network. Supports native ETH and ERC-20 token transfers (including USDC). Built in collaboration with [Mirra](https://x.com/mirra).
+BaseMesh enables cryptocurrency transfers in off-grid environments using LoRa radio. Transactions are signed locally (private keys never leave your device), chunked to fit within LoRa's bandwidth constraints, and relayed through a gateway node to the Base network. Supports native ETH and ERC-20 token transfers (including USDC and BNKR). Built in collaboration with [Mirra](https://x.com/mirra).
 
 ## Operating Modes
 
