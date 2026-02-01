@@ -397,13 +397,15 @@ BaseMesh is experimental software provided "as-is" without warranty of any kind,
 
 **Loss of Funds Risk**: Cryptocurrency transactions are irreversible. Errors in transaction construction, network configuration, or software bugs may result in permanent loss of funds. The authors and contributors are not responsible for any loss of cryptocurrency, tokens, or other digital assets resulting from the use of this software.
 
-**Self-Custody**: BaseMesh is a self-custody tool -- keys are generated and stored locally on your device and are never sent to any server or transmitted over LoRa. You are solely responsible for your own wallets, private keys, mnemonic phrases, and funds. If you lose your private key or mnemonic phrase, your funds cannot be recovered by anyone.
+**Self-Custody**: BaseMesh is a self-custody tool -- keys are generated and stored locally on your device and are never sent to any server or transmitted over LoRa. You are solely responsible for your own wallets, private keys, mnemonic phrases, and funds. If you lose your private key or mnemonic phrase, your funds cannot be recovered by anyone. The authors and contributors do not have access to, do not store, and cannot retrieve your private keys or wallet files under any circumstances.
 
 **Hot Wallet Risk**: Mode 3 gateway operation involves holding a hot wallet with real funds. The gateway operator is solely responsible for securing the hot wallet, configuring appropriate transfer limits and allowlists, and monitoring for unauthorized activity. The authors bear no responsibility for funds lost from hot wallets.
 
 **No Financial Advice**: This software does not constitute financial advice. The authors make no recommendations regarding the purchase, sale, or transfer of any cryptocurrency or token.
 
 **Network Risks**: LoRa mesh radio communication is subject to interference, range limitations, and potential eavesdropping. While transaction data is signed and integrity-checked, the mesh transport layer is not encrypted. Protocol messages (addresses, amounts, transaction hashes) are visible to any node on the same mesh network.
+
+**No Custody or Recovery**: The authors and contributors do not custody, manage, or have any access to user wallets, private keys, or funds. There is no recovery service, no support process, and no mechanism by which the authors can access, freeze, reverse, or restore any wallet or transaction. You alone control your keys and bear full responsibility for their safekeeping.
 
 **Liability Limitation**: The authors and contributors shall not be held liable for any loss of funds, lost keys, failed transactions, security breaches, hacks, or any other damages arising from the use of this software. By using BaseMesh, you agree to hold the authors and contributors harmless from any and all claims, losses, or liabilities.
 

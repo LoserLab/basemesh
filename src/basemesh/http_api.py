@@ -10,6 +10,7 @@ Requires optional dependencies: pip install basemesh[http]
 from __future__ import annotations
 
 import logging
+import secrets
 import time
 from decimal import Decimal
 from typing import Optional, TYPE_CHECKING
@@ -101,7 +102,7 @@ def create_api(gateway: "GatewayNode") -> FastAPI:
     async def verify_api_key(x_api_key: str = Header(...)):
         if not gateway._config.api_key:
             raise HTTPException(500, "API key not configured on server")
-        if x_api_key != gateway._config.api_key:
+        if not secrets.compare_digest(x_api_key, gateway._config.api_key):
             raise HTTPException(401, "Invalid API key")
         return x_api_key
 

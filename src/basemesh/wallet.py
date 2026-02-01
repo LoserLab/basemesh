@@ -195,13 +195,13 @@ class WalletManager:
         with open(path) as f:
             data = json.load(f)
 
-        if data.get("encrypted"):
-            secret_bytes = _decrypt_secret(data["secret"], passphrase)
-        else:
-            logger.warning(
-                "Wallet '%s' is unencrypted. Re-create it with a passphrase.", name
+        if not data.get("encrypted"):
+            raise ValueError(
+                f"Wallet '{name}' is not encrypted. "
+                "Re-create it with a passphrase using: "
+                "basemesh wallet create --name <name>"
             )
-            secret_bytes = bytes.fromhex(data["secret"])
+        secret_bytes = _decrypt_secret(data["secret"], passphrase)
 
         return "0x" + secret_bytes.hex()
 
