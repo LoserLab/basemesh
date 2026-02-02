@@ -1,5 +1,7 @@
 # BaseMesh
 
+> **This project is experimental.** It is published as open-source to share the concept and invite the community to build on it, improve it, and take it further. Contributions, forks, and new ideas are all welcome.
+
 Send Base (Ethereum L2) transactions over Meshtastic/LoRa mesh networks.
 
 BaseMesh enables cryptocurrency transfers in off-grid environments using LoRa radio. Transactions are signed locally (private keys never leave your device), chunked to fit within LoRa's bandwidth constraints, and relayed through a gateway node to the Base network. Supports native ETH and ERC-20 token transfers (including USDC and BNKR). Built in collaboration with [Mirra](https://x.com/mirra).
@@ -431,6 +433,10 @@ PYTHONPATH=src python3 -m pytest tests/ -v
 ## Acknowledgments
 
 Built with [Mirra](https://x.com/mirra) and their team.
+
+## Contributing
+
+This is an experimental project and we encourage the community to build on it. Whether it's bug fixes, new features, protocol improvements, or entirely new directions -- contributions are welcome. Fork it, open a PR, or just take the ideas and run with them.
 
 ## License
 
