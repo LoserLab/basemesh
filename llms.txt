@@ -1,0 +1,76 @@
+# BaseMesh
+
+> Send Base (Ethereum L2) transactions over Meshtastic/LoRa mesh networks. Enables cryptocurrency transfers in off-grid environments. Private keys never leave your device. Supports native ETH and ERC-20 tokens (USDC, BNKR). Built with Mirra.
+
+## Install
+
+```bash
+pip install -e .
+```
+
+## Operating Modes
+
+1. **Offline Sign + Relay**: Sign locally, relay signed tx over mesh to internet-connected gateway
+2. **Wallet-to-Wallet**: Exchange Ethereum addresses over LoRa with ACK confirmation
+3. **Full Gateway**: Gateway holds hot wallet, remote nodes send authenticated transfer requests (secp256k1 ECDSA)
+
+## Quick Start
+
+```bash
+basemesh wallet create --name mywallet
+basemesh gateway --rpc-url https://sepolia.base.org
+basemesh send relay --wallet mywallet --to 0x... --amount 0.01 --auto-discover
+basemesh send request --wallet mywallet --to 0x... --amount 0.1 --gateway-node '!aabbccdd'
+basemesh balance --address 0x... --auto-discover
+```
+
+## ERC-20 Support
+
+```bash
+basemesh send relay --wallet mywallet --to 0x... --amount 10.0 --usdc --auto-discover
+basemesh send relay --wallet mywallet --to 0x... --amount 100.0 --bnkr --auto-discover
+basemesh send relay --wallet mywallet --to 0x... --amount 100.0 --token 0x... --decimals 6 --auto-discover
+```
+
+## Store-and-Forward
+
+Queue transactions offline, auto-flush when a gateway comes into range:
+```bash
+basemesh send deferred --wallet mywallet --to 0x... --amount 0.5 --mode 3
+basemesh listen --wallet mywallet
+```
+
+## HTTP API
+
+REST API for external integrations (Mirra Resource registration):
+```bash
+basemesh gateway --rpc-url https://sepolia.base.org --http-port 8420 --api-key your-key
+```
+
+Endpoints: /v1/status, /v1/balance/{address}, /v1/gas, /v1/nonce/{address}, /v1/transfer
+
+## Protocol
+
+Compact binary protocol for LoRa's ~233-byte limit. 10-byte header, up to 210 bytes payload per chunk. Magic bytes: 0x42 0x4D ("BM"). Typical ETH transfer fits in 2 chunks.
+
+## Security
+
+- Private keys never transmitted over LoRa
+- AES-256-GCM encrypted wallet files (PBKDF2, 480K iterations)
+- BIP39 mnemonic backup, BIP-44 derivation (MetaMask/Ledger compatible)
+- Mode 3: secp256k1 ECDSA + EIP-191 personal sign, allowlist, per-transfer limits
+- Token bucket rate limiting, CRC-8 integrity, replay protection
+
+## Supported Networks
+
+- Base Mainnet (chain 8453)
+- Base Sepolia testnet (chain 84532)
+
+## Related
+
+- [SolMesh](https://github.com/LoserLab/solmesh): Same concept for Solana
+- [Mirra](https://x.com/mirra): AI personal OS, integration partner
+
+## Author
+
+Created by Heathen. Built with Mirra.
